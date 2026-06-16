@@ -5,7 +5,7 @@ yum update -y
 yum install -y python3 python3-pip git
 
 # Install Python packages
-pip3 install Flask pymysql boto3 werkzeug
+pip3 install Flask pymysql boto3 werkzeug gunicorn
 
 # Create application directory
 mkdir -p /opt/app/templates
@@ -458,15 +458,15 @@ After=network.target
 EnvironmentFile=/etc/sysconfig/flaskapp
 User=root
 WorkingDirectory=/opt/app
-ExecStart=/usr/local/bin/flask run --host=0.0.0.0 --port=80
+ExecStart=/usr/local/bin/gunicorn -w 4 -b 0.0.0.0:80 app:app
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-FLASK_BIN=$(which flask)
-sed -i "s|/usr/local/bin/flask|$FLASK_BIN|g" /etc/systemd/system/flaskapp.service
+GUNICORN_BIN=$(which gunicorn)
+sed -i "s|/usr/local/bin/gunicorn|$GUNICORN_BIN|g" /etc/systemd/system/flaskapp.service
 
 systemctl daemon-reload
 systemctl enable flaskapp
