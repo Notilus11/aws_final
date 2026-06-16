@@ -2,7 +2,7 @@
 
 # Update and install required packages
 yum update -y
-yum install -y python3 python3-pip git
+yum install -y python3 python3-pip git nginx
 
 # Install Python packages
 pip3 install Flask pymysql boto3 werkzeug gunicorn
@@ -76,43 +76,62 @@ def get_presigned_url(s3_key):
         print(e)
         return None
 
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    if request.method == 'POST':
-        title = request.form.get('title')
-        description = request.form.get('description')
-        file = request.files.get('image')
+@app.route('/upload', methods=['POST'])
+def upload():
+    title = request.form.get('title')
+    description = request.form.get('description')
+    file = request.files.get('image')
 
-        if not file or file.filename == '':
-            flash('No selected file', 'error')
-            return redirect(request.url)
+    if not file or file.filename == '':
+        flash('No selected file', 'error')
+        return redirect(url_for('index'))
 
-        if file:
-            filename = secure_filename(file.filename)
-            unique_filename = f"{uuid.uuid4()}_{filename}"
-            
-            # Upload to S3
-            try:
-                s3_client.upload_fileobj(
-                    file, 
-                    S3_BUCKET, 
-                    unique_filename,
-                    ExtraArgs={'ContentType': file.content_type}
-                )
-                
-                # Save metadata to RDS
-                conn = get_db_connection()
-                with conn.cursor() as cursor:
-                    sql = "INSERT INTO gallery_posts (title, description, s3_key) VALUES (%s, %s, %s)"
-                    cursor.execute(sql, (title, description, unique_filename))
+    filename = secure_filename(file.filename)
+    unique_filename = f"{uuid.uuid4()}_{filename}"
+    
+    # Upload to S3
+    try:
+        s3_client.upload_fileobj(
+            file, 
+            S3_BUCKET, 
+            unique_filename,
+            ExtraArgs={'ContentType': file.content_type}
+        )
+        
+        # Save metadata to RDS
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            sql = "INSERT INTO gallery_posts (title, description, s3_key) VALUES (%s, %s, %s)"
+            cursor.execute(sql, (title, description, unique_filename))
+        conn.commit()
+        conn.close()
+        flash('Image uploaded successfully!', 'success')
+    except Exception as e:
+        flash(f'Error uploading image: {str(e)}', 'error')
+    
+    return redirect(url_for('index'))
+
+@app.route('/delete/<int:post_id>', methods=['POST'])
+def delete(post_id):
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT s3_key FROM gallery_posts WHERE id = %s", (post_id,))
+            post = cursor.fetchone()
+            if post:
+                s3_client.delete_object(Bucket=S3_BUCKET, Key=post['s3_key'])
+                cursor.execute("DELETE FROM gallery_posts WHERE id = %s", (post_id,))
                 conn.commit()
-                conn.close()
-                flash('Image uploaded successfully!', 'success')
-            except Exception as e:
-                flash(f'Error uploading image: {str(e)}', 'error')
-            
-            return redirect(url_for('index'))
+                flash('Image deleted successfully!', 'success')
+            else:
+                flash('Image not found.', 'error')
+        conn.close()
+    except Exception as e:
+        flash(f'Error deleting image: {str(e)}', 'error')
+    return redirect(url_for('index'))
 
+@app.route('/', methods=['GET'])
+def index():
     # GET request - fetch all posts
     posts = []
     try:
@@ -291,6 +310,21 @@ cat << 'EOF' > templates/index.html
             box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
         }
 
+        .delete-btn {
+            background: transparent;
+            color: #ef4444;
+            border: 1px solid #ef4444;
+            padding: 0.5rem 1rem;
+            width: 100%;
+            margin-top: 1rem;
+        }
+
+        .delete-btn:hover {
+            background: #ef4444;
+            color: white;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+
         /* Gallery Grid */
         .gallery-grid {
             display: grid;
@@ -391,7 +425,7 @@ cat << 'EOF' > templates/index.html
 
         <section class="upload-section">
             <h2 style="margin-bottom: 1.5rem; font-size: 1.2rem; color: #cbd5e1;">Share a new memory</h2>
-            <form action="/" method="POST" enctype="multipart/form-data">
+            <form action="/upload" method="POST" enctype="multipart/form-data">
                 <div class="form-group">
                     <label for="title">Title</label>
                     <input type="text" id="title" name="title" required placeholder="A beautiful sunset...">
@@ -423,6 +457,9 @@ cat << 'EOF' > templates/index.html
                         <h3 class="card-title">{{ post.title }}</h3>
                         <p class="card-desc">{{ post.description }}</p>
                         <p class="card-meta">Uploaded on {{ post.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                        <form action="/delete/{{ post.id }}" method="POST" onsubmit="return confirm('Are you sure you want to delete this image?');">
+                            <button type="submit" class="delete-btn">Delete</button>
+                        </form>
                     </div>
                 </div>
                 {% endfor %}
@@ -458,7 +495,7 @@ After=network.target
 EnvironmentFile=/etc/sysconfig/flaskapp
 User=root
 WorkingDirectory=/opt/app
-ExecStart=/usr/local/bin/gunicorn -w 4 -b 0.0.0.0:80 app:app
+ExecStart=/usr/local/bin/gunicorn -w 4 -b 127.0.0.1:8000 app:app
 Restart=always
 
 [Install]
@@ -468,7 +505,23 @@ EOF
 GUNICORN_BIN=$(which gunicorn)
 sed -i "s|/usr/local/bin/gunicorn|$GUNICORN_BIN|g" /etc/systemd/system/flaskapp.service
 
+cat << 'EOF' > /etc/nginx/conf.d/flask.conf
+server {
+    listen 80;
+    server_name _;
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
 systemctl daemon-reload
 systemctl enable flaskapp
 systemctl restart flaskapp
 systemctl start flaskapp
+
+systemctl enable nginx
+systemctl restart nginx
