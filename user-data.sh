@@ -110,7 +110,7 @@ EOF
 
 # Set environment variables for the Flask app (Systemd service needs them)
 cat << EOF > /etc/sysconfig/flaskapp
-DB_HOST=${DB_HOST}
+DB_HOST=$DB_HOST
 DB_USER=${db_user}
 DB_PASS=${db_pass}
 DB_NAME=${db_name}
