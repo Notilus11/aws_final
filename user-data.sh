@@ -109,7 +109,7 @@ def upload():
     except Exception as e:
         flash(f'Error uploading image: {str(e)}', 'error')
     
-    return redirect(url_for('index'))
+    return redirect(url_for('index'), code=303)
 
 @app.route('/delete/<int:post_id>', methods=['POST'])
 def delete(post_id):
@@ -128,7 +128,7 @@ def delete(post_id):
         conn.close()
     except Exception as e:
         flash(f'Error deleting image: {str(e)}', 'error')
-    return redirect(url_for('index'))
+    return redirect(url_for('index'), code=303)
 
 @app.route('/', methods=['GET'])
 def index():
@@ -495,7 +495,7 @@ After=network.target
 EnvironmentFile=/etc/sysconfig/flaskapp
 User=root
 WorkingDirectory=/opt/app
-ExecStart=/usr/local/bin/gunicorn -w 4 -b 127.0.0.1:8000 app:app
+ExecStart=/usr/local/bin/gunicorn -w 4 --timeout 120 -b 127.0.0.1:8000 app:app
 Restart=always
 
 [Install]
@@ -509,6 +509,10 @@ cat << 'EOF' > /etc/nginx/conf.d/flask.conf
 server {
     listen 80;
     server_name _;
+
+    client_max_body_size 50M;
+    proxy_read_timeout 120s;
+
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
