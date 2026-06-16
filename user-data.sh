@@ -76,40 +76,46 @@ def get_presigned_url(s3_key):
         print(e)
         return None
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    title = request.form.get('title')
-    description = request.form.get('description')
-    file = request.files.get('image')
-
-    if not file or file.filename == '':
-        flash('No selected file', 'error')
-        return redirect(url_for('index'))
-
-    filename = secure_filename(file.filename)
-    unique_filename = f"{uuid.uuid4()}_{filename}"
+@app.route('/generate-presigned-url', methods=['GET'])
+def generate_presigned_url():
+    filename = request.args.get('filename')
+    content_type = request.args.get('content_type')
+    if not filename:
+        return {"error": "Filename is required"}, 400
     
-    # Upload to S3
+    unique_filename = f"{uuid.uuid4()}_{secure_filename(filename)}"
     try:
-        s3_client.upload_fileobj(
-            file, 
-            S3_BUCKET, 
-            unique_filename,
-            ExtraArgs={'ContentType': file.content_type}
+        presigned_post = s3_client.generate_presigned_post(
+            Bucket=S3_BUCKET,
+            Key=unique_filename,
+            Fields={"Content-Type": content_type},
+            Conditions=[{"Content-Type": content_type}],
+            ExpiresIn=3600
         )
-        
-        # Save metadata to RDS
+        return {"presigned_post": presigned_post, "unique_filename": unique_filename}
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+@app.route('/confirm-upload', methods=['POST'])
+def confirm_upload():
+    data = request.json
+    title = data.get('title')
+    description = data.get('description')
+    s3_key = data.get('s3_key')
+
+    if not all([title, s3_key]):
+        return {"error": "Missing required fields"}, 400
+
+    try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
             sql = "INSERT INTO gallery_posts (title, description, s3_key) VALUES (%s, %s, %s)"
-            cursor.execute(sql, (title, description, unique_filename))
+            cursor.execute(sql, (title, description, s3_key))
         conn.commit()
         conn.close()
-        flash('Image uploaded successfully!', 'success')
+        return {"message": "Success"}
     except Exception as e:
-        flash(f'Error uploading image: {str(e)}', 'error')
-    
-    return redirect(url_for('index'), code=303)
+        return {"error": str(e)}, 500
 
 @app.route('/delete/<int:post_id>', methods=['POST'])
 def delete(post_id):
@@ -425,7 +431,7 @@ cat << 'EOF' > templates/index.html
 
         <section class="upload-section">
             <h2 style="margin-bottom: 1.5rem; font-size: 1.2rem; color: #cbd5e1;">Share a new memory</h2>
-            <form action="/upload" method="POST" enctype="multipart/form-data">
+            <form id="upload-form">
                 <div class="form-group">
                     <label for="title">Title</label>
                     <input type="text" id="title" name="title" required placeholder="A beautiful sunset...">
@@ -438,7 +444,7 @@ cat << 'EOF' > templates/index.html
                     <label for="image">Choose Image</label>
                     <input type="file" id="image" name="image" accept="image/*" required>
                 </div>
-                <button type="submit">Upload to AWS</button>
+                <button type="submit" id="upload-btn">Upload to AWS</button>
             </form>
         </section>
 
@@ -471,7 +477,71 @@ cat << 'EOF' > templates/index.html
             {% endif %}
         </section>
     </main>
+    <script>
+        document.getElementById('upload-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const title = document.getElementById('title').value;
+            const description = document.getElementById('description').value;
+            const fileInput = document.getElementById('image');
+            const file = fileInput.files[0];
+            const btn = document.getElementById('upload-btn');
+            
+            if (!file) return;
 
+            btn.disabled = true;
+            btn.textContent = "Requesting Upload URL...";
+
+            try {
+                // 1. Get Presigned URL
+                const response = await fetch(`/generate-presigned-url?filename=${encodeURIComponent(file.name)}&content_type=${encodeURIComponent(file.type)}`);
+                const data = await response.json();
+                
+                if (data.error) throw new Error(data.error);
+                
+                const { presigned_post, unique_filename } = data;
+                
+                // 2. Upload to S3 directly
+                btn.textContent = "Uploading to S3...";
+                const formData = new FormData();
+                Object.keys(presigned_post.fields).forEach(key => {
+                    formData.append(key, presigned_post.fields[key]);
+                });
+                formData.append('file', file);
+                
+                const s3Upload = await fetch(presigned_post.url, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!s3Upload.ok) throw new Error('S3 Upload Failed');
+                
+                // 3. Confirm with backend
+                btn.textContent = "Saving to Database...";
+                const confirmResponse = await fetch('/confirm-upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: title,
+                        description: description,
+                        s3_key: unique_filename
+                    })
+                });
+                
+                const confirmData = await confirmResponse.json();
+                if (confirmData.error) throw new Error(confirmData.error);
+                
+                // Success
+                btn.textContent = "Success! Reloading...";
+                window.location.reload();
+                
+            } catch (err) {
+                alert(err.message);
+                btn.disabled = false;
+                btn.textContent = "Upload to AWS";
+            }
+        });
+    </script>
 </body>
 </html>
 EOF
@@ -515,9 +585,18 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+
+    location = /favicon.ico {
+        access_log off; 
+        log_not_found off; 
+        return 204;
     }
 }
 EOF
