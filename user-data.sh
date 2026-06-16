@@ -494,7 +494,7 @@ cat << 'EOF' > templates/index.html
 
             try {
                 // 1. Get Presigned URL
-                const response = await fetch(`/generate-presigned-url?filename=${encodeURIComponent(file.name)}&content_type=${encodeURIComponent(file.type)}`);
+                const response = await fetch(`/generate-presigned-url?filename=$${encodeURIComponent(file.name)}&content_type=$${encodeURIComponent(file.type)}`);
                 const data = await response.json();
                 
                 if (data.error) throw new Error(data.error);
