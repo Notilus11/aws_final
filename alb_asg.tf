@@ -54,7 +54,7 @@ resource "aws_launch_template" "web" {
   instance_type = var.instance_type
 
   iam_instance_profile {
-    name = aws_iam_instance_profile.ec2_profile.name
+    name = "LabInstanceProfile"
   }
 
   network_interfaces {
