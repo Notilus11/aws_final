@@ -89,3 +89,6 @@ terraform destroy
 ```
 
 Type `yes` when prompted to confirm the destruction of the resources. This will tear down the VPC, EC2 instances, Load Balancer, RDS database, and S3 bucket.
+
+### 8. Current URL
+aws-final-alb-665331136.us-east-1.elb.amazonaws.com
