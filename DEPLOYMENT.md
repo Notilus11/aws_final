@@ -91,4 +91,7 @@ terraform destroy
 Type `yes` when prompted to confirm the destruction of the resources. This will tear down the VPC, EC2 instances, Load Balancer, RDS database, and S3 bucket.
 
 ### 8. Current URL
-aws-final-alb-665331136.us-east-1.elb.amazonaws.com
+
+`aws-final-alb-665331136.us-east-1.elb.amazonaws.com`
+
+note that while AWS lab is stopped the EC2 instances are also stopped in order to save costs, so the website may not work even though the URL is still valid.
