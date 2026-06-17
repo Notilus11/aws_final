@@ -25,3 +25,17 @@ resource "aws_s3_bucket_cors_configuration" "app_bucket_cors" {
     max_age_seconds = 3000
   }
 }
+
+resource "aws_s3_object" "app_py" {
+  bucket = aws_s3_bucket.app_bucket.bucket
+  key    = "app.py"
+  source = "${path.module}/app.py"
+  etag   = filemd5("${path.module}/app.py")
+}
+
+resource "aws_s3_object" "index_html" {
+  bucket = aws_s3_bucket.app_bucket.bucket
+  key    = "index.html"
+  source = "${path.module}/index.html"
+  etag   = filemd5("${path.module}/index.html")
+}
